@@ -709,11 +709,11 @@ const char* contextMessage() {
   if (resK > 0) {
     return "Continue comme ca";
   }
+  if (hasAnyCheese() && resM == 0) {
+    return "Attrappe une souris";
+  }
   if (resM > 0) {
     return "Fabrique des croket'";
-  }
-  if (hasAnyCheese()) {
-    return "Attrappe une souris";
   }
   if (resV < CHEESE_COST_L) {
     snprintf(tutorialMsg, sizeof(tutorialMsg), "Recolte %d legumes", CHEESE_COST_L);
