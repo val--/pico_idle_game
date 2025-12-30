@@ -710,7 +710,7 @@ const char* contextMessage() {
     return "Continue comme ca";
   }
   if (resM > 0) {
-    return "Fabrique des croquettes";
+    return "Fabrique des croket'";
   }
   if (hasAnyCheese()) {
     return "Attrappe une souris";
