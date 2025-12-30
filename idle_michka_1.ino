@@ -110,9 +110,11 @@ struct ResourceBlink {
   unsigned long endTime;
 } mouseBlink = {false, 0}, vegBlink = {false, 0}, croqBlink = {false, 0};
 
-enum ShopMenuState { MENU_CLOSED, MENU_OPEN };
+enum ShopMenuState { MENU_CLOSED, MENU_OPEN, MENU_CONFIRM };
 ShopMenuState shopMenuState = MENU_CLOSED;
 int shopMenuSelection = 0;
+int shopConfirmItem = 0;
+int shopConfirmSelection = 0;
 
 static const unsigned long ARROW_DISPLAY_DURATION_MS = 1500;
 static const unsigned long ARROW_BLINK_PERIOD_MS = 200;
@@ -837,6 +839,45 @@ void drawShopMenu(unsigned long now) {
   u8g2.setDrawColor(1);
 }
 
+void drawShopConfirmMenu(unsigned long now) {
+  drawHUD(now);
+  u8g2.setDrawColor(1);
+  u8g2.drawBox(0, 12, 128, 52);
+  u8g2.setFont(u8g2_font_6x10_tf);
+  u8g2.setDrawColor(0);
+  
+  const char* line1 = "";
+  const char* line2 = "";
+  if (shopConfirmItem == 0) {
+    line1 = "Attire les souris";
+    line2 = "";
+  } else if (shopConfirmItem == 1) {
+    line1 = "Permet de fabriquer";
+    line2 = "des croquettes";
+  } else if (shopConfirmItem == 2) {
+    line1 = "Recolte plus rapide";
+    line2 = "(4 sec au lieu de 5)";
+  }
+  
+  u8g2.drawStr(10, 28, line1);
+  if (line2[0]) {
+    u8g2.drawStr(10, 42, line2);
+  }
+  
+  if (shopConfirmSelection == 0) {
+    u8g2.drawStr(5, 58, ">");
+  }
+  u8g2.drawStr(15, 58, "Annuler");
+  
+  if (shopConfirmSelection == 1) {
+    u8g2.drawStr(65, 58, ">");
+  }
+  u8g2.drawStr(75, 58, "Acheter");
+  
+  u8g2.setDrawColor(1);
+  u8g2.sendBuffer();
+}
+
 void drawWorkshopMenu(unsigned long now) {
   drawHUD(now);
   u8g2.setDrawColor(1);
@@ -924,6 +965,11 @@ void render(unsigned long now) {
     u8g2.drawStr(0, 64, resourceMessage.text);
   }
   
+  if (shopMenuState == MENU_CONFIRM) {
+    drawShopConfirmMenu(now);
+    return;
+  }
+  
   if (shopMenuState == MENU_OPEN) {
     drawShopMenu(now);
   } else if (workshopMenuState == WORKSHOP_MENU_OPEN) {
@@ -1002,22 +1048,62 @@ void updateInput(unsigned long now) {
     }
     if (okEdge) {
       lastInputMs = now;
+      bool canBuy = false;
       if (shopMenuSelection == 0) {
-        int cheeseY = buyCheese(now);
-        if (cheeseY >= 0) {
-          shopMenuState = MENU_CLOSED;
-          arrowIndicator = {true, cheeseY, now + ARROW_DISPLAY_DURATION_MS};
-        }
+        canBuy = hasAvailableCheeseSlots();
       } else if (shopMenuSelection == 1) {
-        if (buyWorkshop()) {
-          shopMenuState = MENU_CLOSED;
-          workshopArrowIndicator = {true, now + ARROW_DISPLAY_DURATION_MS};
-        }
+        canBuy = !hasWorkshop;
       } else if (shopMenuSelection == 2) {
-        if (buyFastHarvest()) {
-          shopMenuState = MENU_CLOSED;
+        canBuy = !hasFastHarvest;
+      }
+      if (canBuy) {
+        shopConfirmItem = shopMenuSelection;
+        shopConfirmSelection = 0;
+        shopMenuState = MENU_CONFIRM;
+      }
+    }
+    return;
+  }
+
+  if (shopMenuState == MENU_CONFIRM) {
+    if (canMove) {
+      if (leftEdge || rightEdge) {
+        shopConfirmSelection = 1 - shopConfirmSelection;
+        lastInputMs = now;
+      }
+    }
+    if (okEdge) {
+      lastInputMs = now;
+      if (shopConfirmSelection == 0) {
+        shopMenuState = MENU_OPEN;
+      } else {
+        if (shopConfirmItem == 0) {
+          int cheeseY = buyCheese(now);
+          if (cheeseY >= 0) {
+            shopMenuState = MENU_CLOSED;
+            arrowIndicator = {true, cheeseY, now + ARROW_DISPLAY_DURATION_MS};
+          } else {
+            shopMenuState = MENU_OPEN;
+          }
+        } else if (shopConfirmItem == 1) {
+          if (buyWorkshop()) {
+            shopMenuState = MENU_CLOSED;
+            workshopArrowIndicator = {true, now + ARROW_DISPLAY_DURATION_MS};
+          } else {
+            shopMenuState = MENU_OPEN;
+          }
+        } else if (shopConfirmItem == 2) {
+          if (buyFastHarvest()) {
+            shopMenuState = MENU_CLOSED;
+          } else {
+            shopMenuState = MENU_OPEN;
+          }
         }
       }
+    }
+    if (leftEdge && !canMove) {
+      shopMenuState = MENU_OPEN;
+      lastInputMs = now;
     }
     return;
   }
