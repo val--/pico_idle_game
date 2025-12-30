@@ -33,7 +33,7 @@ static const int workshopY = 5;
 
 static const int CHEESE_COST_L = 5;
 static const int WORKSHOP_COST_M = 10;
-static const int FAST_HARVEST_COST_K = 10;
+static const int FAST_HARVEST_COST_K = 5;
 static const uint8_t CHEESE_MAX_USES = 3;
 static const unsigned long CHEESE_BLINK_PERIOD_MS = 180;
 static const unsigned long CHEESE_CHECK_EVERY_MS = 900;
@@ -828,7 +828,7 @@ void drawShopMenu(unsigned long now) {
     u8g2.drawStr(15, 40, buf1);
     u8g2.drawStr(5, 54, ">");
     char buf2short[20];
-    snprintf(buf2short, sizeof(buf2short), hasFastHarvest ? "Recolte rapide OK" : "Recolte rap. %dC", FAST_HARVEST_COST_K);
+    snprintf(buf2short, sizeof(buf2short), hasFastHarvest ? "Recolte rapide OK" : "Recolte++. %dC", FAST_HARVEST_COST_K);
     u8g2.drawStr(15, 54, buf2short);
   }
   
@@ -856,7 +856,7 @@ void drawShopConfirmMenu(unsigned long now) {
     line2 = "des croquettes";
   } else if (shopConfirmItem == 2) {
     line1 = "Recolte plus rapide";
-    line2 = "(4 sec au lieu de 5)";
+    line2 = "(4s au lieu de 5s)";
   }
   
   u8g2.drawStr(10, 28, line1);
