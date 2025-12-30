@@ -705,7 +705,21 @@ const char* contextMessage() {
 
   if (isOnWorkshop() && workshopMenuState == WORKSHOP_MENU_CLOSED) return "OK: ouvrir atelier";
 
-  return "Deplace Michka";
+  static char tutorialMsg[32];
+  if (resK > 0) {
+    return "Continue comme ca";
+  }
+  if (resM > 0) {
+    return "Fabrique des croquettes";
+  }
+  if (hasAnyCheese()) {
+    return "Attrappe une souris";
+  }
+  if (resV < CHEESE_COST_L) {
+    snprintf(tutorialMsg, sizeof(tutorialMsg), "Recolte %d legumes", CHEESE_COST_L);
+    return tutorialMsg;
+  }
+  return "Achete un fromage";
 }
 
 void drawTitleScreen() {
