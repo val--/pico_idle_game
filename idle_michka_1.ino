@@ -12,58 +12,48 @@ U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 #define BTN_RIGHT  4
 #define BTN_OK     6
 
-// ---------- Grid ----------
 static const int TILE = 8;
 static const int GRID_W = 16;
-static const int GRID_H = 6;      // 6 tiles high (48 px)
-static const int PLAY_Y0 = 8;     // start y for play area
+static const int GRID_H = 6;
+static const int PLAY_Y0 = 8;
 static const int HOUSE_X0 = 0;
 static const int HOUSE_X1 = 7;
 static const int GARDEN_X0 = 8;
 static const int GARDEN_X1 = 15;
 
-// Door in the wall between house and garden
-static const int DOOR_Y = 3;      // 0..GRID_H-1
+static const int DOOR_Y = 3;
 
 static const int VEG_GROW_MIN_MS = 6500;
 static const int VEG_GROW_MAX_MS = 10000;
 
-// Shop
 static const int shopX = 15;
 static const int shopY = 5;
-
-// Workshop position in house (bas à droite)
 static const int workshopX = 6;
 static const int workshopY = 5;
 
-// Cheese (uses-based)
-static const int CHEESE_COST_L = 5;             // cost in vegetables
-static const int WORKSHOP_COST_M = 10;          // cost in mice
-static const uint8_t CHEESE_MAX_USES = 3;       // 3 "morsures"
+static const int CHEESE_COST_L = 5;
+static const int WORKSHOP_COST_M = 10;
+static const int FAST_HARVEST_COST_K = 10;
+static const uint8_t CHEESE_MAX_USES = 3;
 static const unsigned long CHEESE_BLINK_PERIOD_MS = 180;
-
-// Mouse spawn driven by cheese
-static const unsigned long CHEESE_CHECK_EVERY_MS = 900; // check ~1/sec
-static const int CHEESE_SPAWN_CHANCE_PERCENT = 12;      // "parfois"
+static const unsigned long CHEESE_CHECK_EVERY_MS = 900;
+static const int CHEESE_SPAWN_CHANCE_PERCENT = 12;
 static const int MOUSE_SPEED_SLOW_MS = 420;
 static const int MOUSE_SPEED_FAST_MS = 180;
-
-// Mouse eating pause
 static const unsigned long MOUSE_EAT_PAUSE_MS = 250;
-// Extra "miam" blink while eating (cheese flickers)
 static const unsigned long CHEESE_EAT_FLICKER_MS = 90;
 
-// ---------- Game state ----------
 struct Player { int x, y; } michka{3, 2};
 
-int resM = 0; // souris
-int resV = 0; // legumes
+int resM = 0; // mice
+int resV = 0; // vegetables
 int resK = 0; // croquettes
 
-// Workshop (atelier)
 bool hasWorkshop = false;
 
-// Veggies (garden plots)
+// Upgrades
+bool hasFastHarvest = false;
+
 struct Veg { int x, y; int stage; unsigned long nextStepMs; };
 Veg vegs[] = {
   {10, 1, 0, 0},
@@ -73,7 +63,6 @@ Veg vegs[] = {
 };
 static const int VEG_COUNT = sizeof(vegs)/sizeof(vegs[0]);
 
-// Cheese placed in the house (one per row max, except DOOR_Y)
 struct CheeseLine {
   bool active;
   uint8_t usesLeft;
@@ -81,55 +70,71 @@ struct CheeseLine {
 };
 CheeseLine cheeses[GRID_H];
 
-// Mouse entity
 enum MouseState { HIDDEN, RUNNING, EATING, RETURNING };
 struct Mouse {
   MouseState st;
   int x, y;
-  int dx; // +1 or -1
+  int dx;
   unsigned long nextMoveMs;
   unsigned long returnAtMs;
   int moveDelayMs;
 
-  // For EATING state
   unsigned long eatUntilMs;
 } mouseE{HIDDEN, HOUSE_X0, 0, +1, 0, 0, 300, 0};
 
-// UI
 unsigned long lastInputMs = 0;
 
-// Shop menu
+static const unsigned long HARVEST_DURATION_MS = 5000;
+static const unsigned long HARVEST_DURATION_FAST_MS = 4000;
+static const unsigned long RESOURCE_MESSAGE_DURATION_MS = 1500;
+static const unsigned long HARVEST_VEG_BLINK_MS = 150;
+struct HarvestState {
+  bool active;
+  int vegIndex;
+  unsigned long startTime;
+  unsigned long endTime;
+  bool showMessage;
+  unsigned long messageEndTime;
+} harvestState = {false, -1, 0, 0, false, 0};
+
+struct ResourceMessage {
+  bool active;
+  const char* text;
+  unsigned long endTime;
+} resourceMessage = {false, nullptr, 0};
+
+static const unsigned long RESOURCE_BLINK_DURATION_MS = 800;
+static const unsigned long RESOURCE_BLINK_PERIOD_MS = 100;
+struct ResourceBlink {
+  bool active;
+  unsigned long endTime;
+} mouseBlink = {false, 0}, vegBlink = {false, 0}, croqBlink = {false, 0};
+
 enum ShopMenuState { MENU_CLOSED, MENU_OPEN };
 ShopMenuState shopMenuState = MENU_CLOSED;
-int shopMenuSelection = 0; // 0 = Fromage, 1 = Atelier
+int shopMenuSelection = 0;
 
-// Arrow indicator for newly placed cheese
-static const unsigned long ARROW_DISPLAY_DURATION_MS = 1500; // 1.5 seconds
-static const unsigned long ARROW_BLINK_PERIOD_MS = 200; // blink every 200ms
+static const unsigned long ARROW_DISPLAY_DURATION_MS = 1500;
+static const unsigned long ARROW_BLINK_PERIOD_MS = 200;
 struct ArrowIndicator {
   bool active;
-  int cheeseY; // row where cheese was placed
+  int cheeseY;
   unsigned long endTime;
 } arrowIndicator = {false, -1, 0};
 
-// Arrow indicator for newly placed workshop
 struct WorkshopArrowIndicator {
   bool active;
   unsigned long endTime;
 } workshopArrowIndicator = {false, 0};
 
-// Workshop menu
 enum WorkshopMenuState { WORKSHOP_MENU_CLOSED, WORKSHOP_MENU_OPEN };
 WorkshopMenuState workshopMenuState = WORKSHOP_MENU_CLOSED;
 
-// Title screen
 enum TitleState { TITLE_SHOWING, TITLE_PLAYING };
 TitleState titleState = TITLE_SHOWING;
-int titleMenuSelection = 0; // 0 = Nouveau, 1 = Continuer
+int titleMenuSelection = 0;
 
-// ---------- Save system ----------
-// Magic number to verify save validity
-#define SAVE_MAGIC 0x4D494348  // "MICH" en hex
+#define SAVE_MAGIC 0x4D494348
 #define SAVE_VERSION 1
 
 struct SaveData {
@@ -144,6 +149,8 @@ struct SaveData {
   int16_t resK;
   // Workshop
   bool hasWorkshop;
+  // Upgrades
+  bool hasFastHarvest;
   // Veggies
   struct VegSave {
     int8_t x, y;
@@ -156,14 +163,12 @@ struct SaveData {
     uint8_t usesLeft;
     uint8_t usesMax;
   } cheeses[GRID_H];
-  // Checksum (simple sum)
   uint32_t checksum;
 };
 
-static const int SAVE_INTERVAL_MS = 5000; // Sauvegarder toutes les 5 secondes
+static const int SAVE_INTERVAL_MS = 5000;
 unsigned long lastSaveMs = 0;
 
-// ---------- Helpers ----------
 bool pressed(int pin) { return digitalRead(pin) == LOW; }
 
 bool edgePress(bool current, bool &prev) {
@@ -180,7 +185,6 @@ int clampi(int v, int lo, int hi) {
 
 void seedRandom() { randomSeed(micros()); }
 
-// ---------- Save/Load ----------
 uint32_t calculateChecksum(SaveData* data) {
   uint32_t sum = 0;
   uint8_t* bytes = (uint8_t*)data;
@@ -193,29 +197,22 @@ uint32_t calculateChecksum(SaveData* data) {
 
 void saveGame() {
   SaveData save;
-  unsigned long now = millis(); // Capturer le temps une seule fois
+  unsigned long now = millis();
   
   save.magic = SAVE_MAGIC;
   save.version = SAVE_VERSION;
-  
-  // Player
   save.michkaX = michka.x;
   save.michkaY = michka.y;
-  
-  // Resources
   save.resM = resM;
   save.resV = resV;
   save.resK = resK;
-  
-  // Workshop
   save.hasWorkshop = hasWorkshop;
+  save.hasFastHarvest = hasFastHarvest;
   
-  // Veggies
   for (int i = 0; i < VEG_COUNT; i++) {
     save.vegs[i].x = vegs[i].x;
     save.vegs[i].y = vegs[i].y;
     save.vegs[i].stage = vegs[i].stage;
-    // Sauvegarder le temps relatif au lieu du temps absolu
     if (vegs[i].nextStepMs > 0 && vegs[i].nextStepMs > now) {
       save.vegs[i].nextStepMs = vegs[i].nextStepMs - now;
     } else {
@@ -223,17 +220,13 @@ void saveGame() {
     }
   }
   
-  // Cheeses
   for (int y = 0; y < GRID_H; y++) {
     save.cheeses[y].active = cheeses[y].active;
     save.cheeses[y].usesLeft = cheeses[y].usesLeft;
     save.cheeses[y].usesMax = cheeses[y].usesMax;
   }
   
-  // Calculate checksum
   save.checksum = calculateChecksum(&save);
-  
-  // Write to EEPROM
   EEPROM.put(0, save);
   EEPROM.commit();
 }
@@ -242,55 +235,36 @@ bool loadGame() {
   SaveData save;
   EEPROM.get(0, save);
   
-  // Verify magic number
-  if (save.magic != SAVE_MAGIC) {
+  if (save.magic != SAVE_MAGIC || save.version != SAVE_VERSION) {
     return false;
   }
   
-  // Verify version
-  if (save.version != SAVE_VERSION) {
+  if (save.checksum != calculateChecksum(&save)) {
     return false;
   }
   
-  // Verify checksum
-  uint32_t calculatedChecksum = calculateChecksum(&save);
-  if (save.checksum != calculatedChecksum) {
-    return false;
-  }
-  
-  // Load player
   michka.x = save.michkaX;
   michka.y = save.michkaY;
-  
-  // Load resources
   resM = save.resM;
   resV = save.resV;
   resK = save.resK;
-  
-  // Load workshop
   hasWorkshop = save.hasWorkshop;
+  hasFastHarvest = save.hasFastHarvest;
   
-  // Load veggies
   unsigned long now = millis();
   for (int i = 0; i < VEG_COUNT; i++) {
     vegs[i].x = save.vegs[i].x;
     vegs[i].y = save.vegs[i].y;
     vegs[i].stage = save.vegs[i].stage;
-    if (save.vegs[i].nextStepMs > 0) {
-      vegs[i].nextStepMs = now + save.vegs[i].nextStepMs;
-    } else {
-      vegs[i].nextStepMs = 0;
-    }
+    vegs[i].nextStepMs = (save.vegs[i].nextStepMs > 0) ? now + save.vegs[i].nextStepMs : 0;
   }
   
-  // Load cheeses
   for (int y = 0; y < GRID_H; y++) {
     cheeses[y].active = save.cheeses[y].active;
     cheeses[y].usesLeft = save.cheeses[y].usesLeft;
     cheeses[y].usesMax = save.cheeses[y].usesMax;
   }
   
-  // Reset mouse (on ne sauvegarde pas l'état de la souris)
   mouseE.st = HIDDEN;
   mouseE.x = HOUSE_X0;
   mouseE.y = 0;
@@ -315,47 +289,29 @@ bool hasSaveGame() {
 }
 
 void resetGame() {
-  // Réinitialiser toutes les valeurs par défaut
   michka.x = 3;
   michka.y = 2;
-  resM = 0;
-  resV = 0;
-  resK = 0;
-  hasWorkshop = false;
+  resM = resV = resK = 0;
+  hasWorkshop = hasFastHarvest = false;
   
-  // Réinitialiser les légumes
-  vegs[0].x = 10; vegs[0].y = 1; vegs[0].stage = 0; vegs[0].nextStepMs = 0;
-  vegs[1].x = 12; vegs[1].y = 3; vegs[1].stage = 0; vegs[1].nextStepMs = 0;
-  vegs[2].x = 14; vegs[2].y = 2; vegs[2].stage = 0; vegs[2].nextStepMs = 0;
-  vegs[3].x =  9; vegs[3].y = 4; vegs[3].stage = 0; vegs[3].nextStepMs = 0;
+  vegs[0] = {10, 1, 0, 0};
+  vegs[1] = {12, 3, 0, 0};
+  vegs[2] = {14, 2, 0, 0};
+  vegs[3] = { 9, 4, 0, 0};
   
-  // Réinitialiser les fromages
   for (int y = 0; y < GRID_H; y++) {
-    cheeses[y].active = false;
-    cheeses[y].usesMax = CHEESE_MAX_USES;
-    cheeses[y].usesLeft = 0;
+    cheeses[y] = {false, 0, CHEESE_MAX_USES};
   }
   
-  // Réinitialiser la souris
-  mouseE.st = HIDDEN;
-  mouseE.x = HOUSE_X0;
-  mouseE.y = 0;
-  mouseE.dx = +1;
-  mouseE.nextMoveMs = 0;
-  mouseE.returnAtMs = 0;
-  mouseE.moveDelayMs = 300;
-  mouseE.eatUntilMs = 0;
+  mouseE = {HIDDEN, HOUSE_X0, 0, +1, 0, 0, 300, 0};
   
-  // Réinitialiser les menus
   shopMenuState = MENU_CLOSED;
   workshopMenuState = WORKSHOP_MENU_CLOSED;
-  
-  // Réinitialiser les indicateurs de flèche
-  arrowIndicator.active = false;
-  arrowIndicator.cheeseY = -1;
-  arrowIndicator.endTime = 0;
-  workshopArrowIndicator.active = false;
-  workshopArrowIndicator.endTime = 0;
+  arrowIndicator = {false, -1, 0};
+  workshopArrowIndicator = {false, 0};
+  harvestState = {false, -1, 0, 0, false, 0};
+  resourceMessage = {false, nullptr, 0};
+  mouseBlink = vegBlink = croqBlink = {false, 0};
   
   lastSaveMs = millis();
 }
@@ -396,7 +352,8 @@ void drawVeg(int gx, int gy, int stage) {
 void drawDividerWithDoor() {
   int sepX = 8 * TILE;
 
-  for (int ty = 0; ty < GRID_H; ty++) {
+  // Start from ty=1 to avoid drawing the top line that conflicts with HUD
+  for (int ty = 1; ty < GRID_H; ty++) {
     if (ty == DOOR_Y) continue;
     u8g2.drawVLine(sepX, PLAY_Y0 + ty * TILE, TILE);
   }
@@ -422,73 +379,48 @@ void drawCheese(int gx, int gy) {
   u8g2.drawPixel(x + 5, y + 4);
 }
 
-// Workshop icon (table simple et lisible)
 void drawWorkshop(int gx, int gy) {
-  int x = gx * TILE;
-  int y = PLAY_Y0 + gy * TILE;
-  // Plateau de la table (horizontal)
+  int x = gx * TILE, y = PLAY_Y0 + gy * TILE;
   u8g2.drawBox(x + 1, y + 5, 6, 2);
-  // Pieds de la table (2 supports verticaux)
   u8g2.drawVLine(x + 2, y + 3, 2);
   u8g2.drawVLine(x + 5, y + 3, 2);
-  // Objet sur la table (petit rectangle)
   u8g2.drawBox(x + 3, y + 3, 2, 2);
 }
 
-// Draw arrow indicator pointing to newly placed cheese
+void drawArrow(int x, int y, unsigned long now, bool active, unsigned long endTime) {
+  if (!active || now >= endTime) return;
+  if (((now / ARROW_BLINK_PERIOD_MS) % 2) != 0) return;
+  
+  u8g2.drawHLine(x + 2, y + 4, 3);
+  u8g2.drawPixel(x + 5, y + 3);
+  u8g2.drawPixel(x + 6, y + 4);
+  u8g2.drawPixel(x + 5, y + 5);
+}
+
 void drawArrowIndicator(int cheeseY, unsigned long now) {
-  if (!arrowIndicator.active || arrowIndicator.cheeseY != cheeseY) return;
-  if (now >= arrowIndicator.endTime) {
-    arrowIndicator.active = false;
-    return;
+  if (arrowIndicator.active && arrowIndicator.cheeseY == cheeseY) {
+    drawArrow((HOUSE_X1 - 1) * TILE, PLAY_Y0 + cheeseY * TILE, now, 
+              arrowIndicator.active, arrowIndicator.endTime);
+    if (now >= arrowIndicator.endTime) arrowIndicator.active = false;
   }
-  
-  // Blink the arrow
-  bool visible = ((now / ARROW_BLINK_PERIOD_MS) % 2) == 0;
-  if (!visible) return;
-  
-  int x = (HOUSE_X1 - 1) * TILE; // Position à gauche du fromage (x=6)
-  int y = PLAY_Y0 + cheeseY * TILE;
-  
-  // Draw arrow "->" simple et lisible
-  // Ligne horizontale
-  u8g2.drawHLine(x + 2, y + 4, 3);
-  // Pointe de flèche (triangle simple)
-  u8g2.drawPixel(x + 5, y + 3);
-  u8g2.drawPixel(x + 6, y + 4);
-  u8g2.drawPixel(x + 5, y + 5);
 }
 
-// Draw arrow indicator pointing to newly placed workshop
 void drawWorkshopArrowIndicator(unsigned long now) {
-  if (!workshopArrowIndicator.active) return;
-  if (now >= workshopArrowIndicator.endTime) {
-    workshopArrowIndicator.active = false;
-    return;
+  if (workshopArrowIndicator.active) {
+    drawArrow((workshopX - 1) * TILE, PLAY_Y0 + workshopY * TILE, now,
+              workshopArrowIndicator.active, workshopArrowIndicator.endTime);
+    if (now >= workshopArrowIndicator.endTime) workshopArrowIndicator.active = false;
   }
-  
-  // Blink the arrow
-  bool visible = ((now / ARROW_BLINK_PERIOD_MS) % 2) == 0;
-  if (!visible) return;
-  
-  int x = (workshopX - 1) * TILE; // Position à gauche de l'atelier (x=5)
-  int y = PLAY_Y0 + workshopY * TILE;
-  
-  // Draw arrow "->" simple et lisible
-  // Ligne horizontale
-  u8g2.drawHLine(x + 2, y + 4, 3);
-  // Pointe de flèche (triangle simple)
-  u8g2.drawPixel(x + 5, y + 3);
-  u8g2.drawPixel(x + 6, y + 4);
-  u8g2.drawPixel(x + 5, y + 5);
 }
 
-// ---------- Logic ----------
-bool isOnShop() { 
-  // Vérifier si on est adjacent au magasin (pas dessus)
-  int dx = abs(michka.x - shopX);
-  int dy = abs(michka.y - shopY);
+bool isAdjacentTo(int x, int y) {
+  int dx = abs(michka.x - x);
+  int dy = abs(michka.y - y);
   return (dx <= 1 && dy <= 1 && !(dx == 0 && dy == 0));
+}
+
+bool isOnShop() {
+  return isAdjacentTo(shopX, shopY);
 }
 
 int vegIndexAtPlayer() {
@@ -553,19 +485,14 @@ bool hasAnyCheese() {
   return false;
 }
 
-// Check if there are available slots for placing cheese
 bool hasAvailableCheeseSlots() {
   for (int y = 0; y < GRID_H; y++) {
-    if (y == DOOR_Y) continue;           // Pas devant la porte
-    if (y == workshopY) continue;        // Pas sur la ligne de l'atelier
-    if (!cheeses[y].active) {            // Seulement les lignes libres
-      return true;
-    }
+    if (y == DOOR_Y || y == workshopY) continue;
+    if (!cheeses[y].active) return true;
   }
   return false;
 }
 
-// Spawn a mouse ONLY if at least one cheese is active
 void spawnMouseFromCheese(unsigned long now) {
   if (mouseE.st != HIDDEN) return;
   if (!hasAnyCheese()) return;
@@ -577,12 +504,10 @@ void spawnMouseFromCheese(unsigned long now) {
   int r = random(0, 100);
   if (r >= CHEESE_SPAWN_CHANCE_PERCENT) return;
 
-  // gather active rows
   int rows[GRID_H];
   int count = 0;
   for (int y = 0; y < GRID_H; y++) {
-    if (y == DOOR_Y) continue;
-    if (cheeses[y].active) rows[count++] = y;
+    if (y != DOOR_Y && cheeses[y].active) rows[count++] = y;
   }
   if (count == 0) return;
 
@@ -600,65 +525,54 @@ void spawnMouseFromCheese(unsigned long now) {
   mouseE.eatUntilMs = 0;
 }
 
-// Buy cheese: place it randomly on an available house row (x=7), excluding DOOR_Y and workshop row
-// Returns the Y position of the placed cheese, or -1 if purchase failed
 int buyCheese(unsigned long now) {
   (void)now;
   if (resV < CHEESE_COST_L) return -1;
 
-  // Rassembler toutes les lignes disponibles (pas la porte, pas l'atelier)
   int availableRows[GRID_H];
   int count = 0;
   for (int y = 0; y < GRID_H; y++) {
-    if (y == DOOR_Y) continue;           // Pas devant la porte
-    if (y == workshopY) continue;        // Pas sur la ligne de l'atelier
-    if (!cheeses[y].active) {            // Seulement les lignes libres
+    if (y != DOOR_Y && y != workshopY && !cheeses[y].active) {
       availableRows[count++] = y;
     }
   }
   
-  if (count == 0) return -1; // Aucune ligne disponible
+  if (count == 0) return -1;
   
-  // Choisir aléatoirement parmi les lignes disponibles
   int chosenY = availableRows[random(0, count)];
-  
   resV -= CHEESE_COST_L;
-  cheeses[chosenY].active = true;
-  cheeses[chosenY].usesMax = CHEESE_MAX_USES;
-  cheeses[chosenY].usesLeft = CHEESE_MAX_USES;
+  cheeses[chosenY] = {true, CHEESE_MAX_USES, CHEESE_MAX_USES};
   return chosenY;
 }
 
-// Buy workshop
 bool buyWorkshop() {
-  if (hasWorkshop) return false; // Déjà possédé
-  if (resM < WORKSHOP_COST_M) return false;
-  
+  if (hasWorkshop || resM < WORKSHOP_COST_M) return false;
   resM -= WORKSHOP_COST_M;
   hasWorkshop = true;
   return true;
 }
 
-// Craft croquettes (nécessite l'atelier)
-// Coût: 4 souris et 2 légumes pour 1 croquette
+bool buyFastHarvest() {
+  if (hasFastHarvest || resK < FAST_HARVEST_COST_K) return false;
+  resK -= FAST_HARVEST_COST_K;
+  hasFastHarvest = true;
+  return true;
+}
+
 static const int CROQUETTE_COST_M = 4;
 static const int CROQUETTE_COST_L = 2;
-bool craftCroquettes() {
-  if (!hasWorkshop) return false;
-  if (resM < CROQUETTE_COST_M) return false;
-  if (resV < CROQUETTE_COST_L) return false;
+bool craftCroquettes(unsigned long now) {
+  if (!hasWorkshop || resM < CROQUETTE_COST_M || resV < CROQUETTE_COST_L) return false;
   resM -= CROQUETTE_COST_M;
   resV -= CROQUETTE_COST_L;
   resK += 1;
+  resourceMessage = {true, "+1 paqu. de croquettes", now + RESOURCE_MESSAGE_DURATION_MS};
+  croqBlink = {true, now + RESOURCE_BLINK_DURATION_MS};
   return true;
 }
 
 bool isOnWorkshop() {
-  if (!hasWorkshop) return false;
-  // Vérifier si on est adjacent à l'atelier (pas dessus)
-  int dx = abs(michka.x - workshopX);
-  int dy = abs(michka.y - workshopY);
-  return (dx <= 1 && dy <= 1 && !(dx == 0 && dy == 0));
+  return hasWorkshop && isAdjacentTo(workshopX, workshopY);
 }
 
 void consumeCheeseAtRow(int y) {
@@ -668,6 +582,32 @@ void consumeCheeseAtRow(int y) {
 
   if (cheeses[y].usesLeft > 0) cheeses[y].usesLeft--;
   if (cheeses[y].usesLeft == 0) cheeses[y].active = false;
+}
+
+void updateHarvest(unsigned long now) {
+  if (harvestState.active && now >= harvestState.endTime) {
+    if (harvestState.vegIndex >= 0 && harvestState.vegIndex < VEG_COUNT) {
+      resV += 1;
+      vegs[harvestState.vegIndex].stage = 0;
+      vegs[harvestState.vegIndex].nextStepMs = 0;
+    }
+    harvestState.showMessage = true;
+    harvestState.messageEndTime = now + RESOURCE_MESSAGE_DURATION_MS;
+    resourceMessage = {true, "+ 1 legume !", now + RESOURCE_MESSAGE_DURATION_MS};
+    vegBlink = {true, now + RESOURCE_BLINK_DURATION_MS};
+    harvestState.active = false;
+    harvestState.vegIndex = -1;
+  }
+  
+  if (harvestState.showMessage && now >= harvestState.messageEndTime) {
+    harvestState.showMessage = false;
+  }
+  if (resourceMessage.active && now >= resourceMessage.endTime) {
+    resourceMessage = {false, nullptr, 0};
+  }
+  if (mouseBlink.active && now >= mouseBlink.endTime) mouseBlink.active = false;
+  if (vegBlink.active && now >= vegBlink.endTime) vegBlink.active = false;
+  if (croqBlink.active && now >= croqBlink.endTime) croqBlink.active = false;
 }
 
 void updateMouse(unsigned long now) {
@@ -725,40 +665,31 @@ void updateMouse(unsigned long now) {
 }
 
 void handleOkAction(unsigned long now) {
-  // capture mouse
   if (isNearMouse()) {
     resM += 1;
     mouseE.st = HIDDEN;
+    resourceMessage = {true, "+ 1 souris", now + RESOURCE_MESSAGE_DURATION_MS};
+    mouseBlink = {true, now + RESOURCE_BLINK_DURATION_MS};
     return;
   }
 
-  // harvest veg
   int vi = vegIndexAtPlayer();
-  if (vi >= 0 && vegs[vi].stage == 2) {
-    resV += 1;
-    vegs[vi].stage = 0;
-    vegs[vi].nextStepMs = 0;
+  if (vi >= 0 && vegs[vi].stage == 2 && !harvestState.active) {
+    unsigned long duration = hasFastHarvest ? HARVEST_DURATION_FAST_MS : HARVEST_DURATION_MS;
+    harvestState = {true, vi, now, now + duration, false, 0};
     return;
   }
 
-  // open shop menu
-  if (isOnShop()) {
-    if (shopMenuState == MENU_CLOSED) {
-      shopMenuState = MENU_OPEN;
-      shopMenuSelection = 0;
-    }
+  if (isOnShop() && shopMenuState == MENU_CLOSED) {
+    shopMenuState = MENU_OPEN;
+    shopMenuSelection = 0;
     return;
   }
 
-  // open workshop menu
-  if (isOnWorkshop()) {
-    if (workshopMenuState == WORKSHOP_MENU_CLOSED) {
-      workshopMenuState = WORKSHOP_MENU_OPEN;
-    }
+  if (isOnWorkshop() && workshopMenuState == WORKSHOP_MENU_CLOSED) {
+    workshopMenuState = WORKSHOP_MENU_OPEN;
     return;
   }
-
-  // OK on cheese: no action (status shown via contextMessage)
 }
 
 const char* contextMessage() {
@@ -777,33 +708,24 @@ const char* contextMessage() {
   return "Deplace Michka";
 }
 
-// ---------- Render ----------
 void drawTitleScreen() {
   u8g2.clearBuffer();
-  
-  // Titre principal avec une police plus grande
   u8g2.setFont(u8g2_font_8x13B_tf);
   u8g2.drawStr(15, 18, "La Maison");
   u8g2.drawStr(20, 32, "de Michka");
   
-  // Petit dessin de chat à côté du titre
-  int titleX = 100;
-  int titleY = 8;
-  u8g2.drawBox(titleX + 2, titleY + 3, 4, 4);      // body
-  u8g2.drawPixel(titleX + 2, titleY + 2);          // ears
+  int titleX = 100, titleY = 8;
+  u8g2.drawBox(titleX + 2, titleY + 3, 4, 4);
+  u8g2.drawPixel(titleX + 2, titleY + 2);
   u8g2.drawPixel(titleX + 5, titleY + 2);
   
-  // Menu
   u8g2.setFont(u8g2_font_6x10_tf);
-  
-  // Option "Nouveau"
   if (titleMenuSelection == 0) {
     u8g2.drawStr(8, 48, "> Nouveau");
   } else {
     u8g2.drawStr(18, 48, "Nouveau");
   }
   
-  // Option "Continuer" (seulement si sauvegarde existe)
   if (hasSaveGame()) {
     if (titleMenuSelection == 1) {
       u8g2.drawStr(8, 58, "> Continuer");
@@ -815,80 +737,104 @@ void drawTitleScreen() {
   u8g2.sendBuffer();
 }
 
-void drawHUD() {
+void drawHUD(unsigned long now) {
   u8g2.setFont(u8g2_font_6x10_tf);
+  u8g2.setDrawColor(1);
   char hud[32];
-  snprintf(hud, sizeof(hud), "S:%d L:%d", resM, resV);
+  
+  bool blinkS = mouseBlink.active && ((now / RESOURCE_BLINK_PERIOD_MS) % 2) == 1;
+  bool blinkL = vegBlink.active && ((now / RESOURCE_BLINK_PERIOD_MS) % 2) == 1;
+  
+  snprintf(hud, sizeof(hud), "S:%3d L:%3d", resM, resV);
   u8g2.drawStr(0, 10, hud);
+  
+  if (blinkS) {
+    u8g2.setDrawColor(0);
+    u8g2.drawBox(12, 1, 18, 9);
+    u8g2.setDrawColor(1);
+  }
+  if (blinkL) {
+    u8g2.setDrawColor(0);
+    u8g2.drawBox(48, 1, 18, 9);
+    u8g2.setDrawColor(1);
+  }
+  
   if (hasWorkshop) {
-    snprintf(hud, sizeof(hud), "Croq:%d", resK);
+    bool blinkCroq = croqBlink.active && ((now / RESOURCE_BLINK_PERIOD_MS) % 2) == 1;
+    snprintf(hud, sizeof(hud), "C:%3d", resK);
     u8g2.drawStr(80, 10, hud);
+    if (blinkCroq) {
+      u8g2.setDrawColor(0);
+      u8g2.drawBox(92, 1, 18, 9);
+      u8g2.setDrawColor(1);
+    }
   }
 }
 
-void drawShopMenu() {
-  // Afficher le HUD en haut
-  drawHUD();
-  
-  // Menu - fond noir en dessous du HUD
+void drawShopMenu(unsigned long now) {
+  drawHUD(now);
   u8g2.setDrawColor(1);
   u8g2.drawBox(0, 12, 128, 52);
-  
-  // Police et couleur pour texte blanc
   u8g2.setFont(u8g2_font_6x10_tf);
   u8g2.setDrawColor(0);
-  
-  // Titre
   u8g2.drawStr(45, 24, "MAGASIN");
   
-  // Item 0
   char buf0[20];
   if (hasAvailableCheeseSlots()) {
     snprintf(buf0, sizeof(buf0), "Fromage %dL", CHEESE_COST_L);
   } else {
     snprintf(buf0, sizeof(buf0), "Fromage MAX");
   }
-  if (shopMenuSelection == 0) {
-    u8g2.drawStr(20, 40, ">");
-  }
-  u8g2.drawStr(30, 40, buf0);
   
-  // Item 1
   char buf1[20];
   if (hasWorkshop) {
     snprintf(buf1, sizeof(buf1), "Atelier OK");
   } else {
     snprintf(buf1, sizeof(buf1), "Atelier %dS", WORKSHOP_COST_M);
   }
-  if (shopMenuSelection == 1) {
-    u8g2.drawStr(20, 54, ">");
+  
+  char buf2[25];
+  if (hasFastHarvest) {
+    snprintf(buf2, sizeof(buf2), "Recolte rapide OK");
+  } else {
+    snprintf(buf2, sizeof(buf2), "Recolte rapide %dC", FAST_HARVEST_COST_K);
   }
-  u8g2.drawStr(30, 54, buf1);
+  
+  if (shopMenuSelection == 0) {
+    u8g2.drawStr(5, 40, ">");
+    u8g2.drawStr(15, 40, buf0);
+    u8g2.drawStr(15, 54, buf1);
+  } else if (shopMenuSelection == 1) {
+    u8g2.drawStr(15, 40, buf0);
+    u8g2.drawStr(5, 54, ">");
+    u8g2.drawStr(15, 54, buf1);
+  } else {
+    u8g2.drawStr(15, 40, buf1);
+    u8g2.drawStr(5, 54, ">");
+    char buf2short[20];
+    snprintf(buf2short, sizeof(buf2short), hasFastHarvest ? "Recolte rapide OK" : "Recolte rap. %dC", FAST_HARVEST_COST_K);
+    u8g2.drawStr(15, 54, buf2short);
+  }
+  
+  if (shopMenuSelection < 2) {
+    u8g2.drawStr(120, 64, "v");
+  }
   
   u8g2.setDrawColor(1);
 }
 
-void drawWorkshopMenu() {
-  // Afficher le HUD en haut
-  drawHUD();
-  
-  // Menu - fond noir en dessous du HUD
+void drawWorkshopMenu(unsigned long now) {
+  drawHUD(now);
   u8g2.setDrawColor(1);
   u8g2.drawBox(0, 12, 128, 52);
-  
-  // Police et couleur pour texte blanc
   u8g2.setFont(u8g2_font_6x10_tf);
   u8g2.setDrawColor(0);
-  
-  // Titre
   u8g2.drawStr(45, 24, "ATELIER");
   
-  // Item
   char buf[20];
   snprintf(buf, sizeof(buf), "Croquette %dS %dL", CROQUETTE_COST_M, CROQUETTE_COST_L);
-  u8g2.drawStr(20, 40, ">");
-  u8g2.drawStr(30, 40, buf);
-  
+  u8g2.drawStr(5, 40, ">");
+  u8g2.drawStr(15, 40, buf);
   u8g2.setDrawColor(1);
 }
 
@@ -900,7 +846,7 @@ void render(unsigned long now) {
   
   u8g2.clearBuffer();
 
-  drawHUD();
+  drawHUD(now);
   drawDividerWithDoor();
 
   // shop
@@ -908,19 +854,20 @@ void render(unsigned long now) {
 
   // veggies
   for (int i = 0; i < VEG_COUNT; i++) {
-    drawVeg(vegs[i].x, vegs[i].y, vegs[i].stage);
+    // Blink veg if being harvested
+    bool shouldDraw = true;
+    if (harvestState.active && harvestState.vegIndex == i && vegs[i].stage == 2) {
+      shouldDraw = ((now / HARVEST_VEG_BLINK_MS) % 2) == 0;
+    }
+    if (shouldDraw) {
+      drawVeg(vegs[i].x, vegs[i].y, vegs[i].stage);
+    }
   }
 
-  // cheeses:
-  // - blink when usesLeft == 1 (about to disappear)
-  // - ALSO flicker quickly while the mouse is EATING on that row (miam effect)
   for (int y = 0; y < GRID_H; y++) {
-    if (y == DOOR_Y) continue;
-    if (!cheeses[y].active) continue;
+    if (y == DOOR_Y || !cheeses[y].active) continue;
 
     bool drawIt = true;
-
-    // Extra "miam" flicker while eating THIS cheese
     if (mouseE.st == EATING && mouseE.y == y) {
       drawIt = ((now / CHEESE_EAT_FLICKER_MS) % 2) == 0;
     } else if (cheeses[y].usesLeft == 1) {
@@ -928,38 +875,46 @@ void render(unsigned long now) {
     }
 
     if (drawIt) drawCheese(HOUSE_X1, y);
-    
-    // Draw arrow indicator for newly placed cheese
     drawArrowIndicator(y, now);
   }
 
-  // workshop (si possédé)
   if (hasWorkshop) {
     drawWorkshop(workshopX, workshopY);
-    // Draw arrow indicator for newly placed workshop
     drawWorkshopArrowIndicator(now);
   }
 
-  // mouse blink tied to speed (when EATING -> steady ON for readability)
   if (mouseE.st != HIDDEN) {
-    bool mouseVisible = true;
-    if (mouseE.st != EATING) {
-      int blinkPeriod = clampi(mouseE.moveDelayMs, 160, 500);
-      mouseVisible = ((now / (unsigned long)blinkPeriod) % 2) == 0;
-    }
+    bool mouseVisible = (mouseE.st == EATING) || ((now / (unsigned long)clampi(mouseE.moveDelayMs, 160, 500)) % 2) == 0;
     drawMouse(mouseE.x, mouseE.y, mouseVisible);
   }
 
-  // player
   drawMichka(michka.x, michka.y);
 
-  // Menus (par-dessus tout)
+  if (harvestState.active) {
+    unsigned long elapsed = now - harvestState.startTime;
+    unsigned long total = harvestState.endTime - harvestState.startTime;
+    int progress = clampi((int)((elapsed * 100) / total), 0, 100);
+    
+    int barX = 4, barY = 60, barW = 120, barH = 4;
+    u8g2.setDrawColor(1);
+    u8g2.drawFrame(barX, barY, barW, barH);
+    int fillW = (progress * (barW - 2)) / 100;
+    if (fillW > 0) {
+      u8g2.drawBox(barX + 1, barY + 1, fillW, barH - 2);
+    }
+  }
+  
+  if (resourceMessage.active && resourceMessage.text != nullptr) {
+    u8g2.setFont(u8g2_font_6x10_tf);
+    u8g2.setDrawColor(1);
+    u8g2.drawStr(0, 64, resourceMessage.text);
+  }
+  
   if (shopMenuState == MENU_OPEN) {
-    drawShopMenu();
+    drawShopMenu(now);
   } else if (workshopMenuState == WORKSHOP_MENU_OPEN) {
-    drawWorkshopMenu();
-  } else {
-    // bottom message (seulement si menus fermés)
+    drawWorkshopMenu(now);
+  } else if (!harvestState.active && !harvestState.showMessage && !resourceMessage.active) {
     u8g2.setFont(u8g2_font_6x10_tf);
     u8g2.drawStr(0, 64, contextMessage());
   }
@@ -974,6 +929,11 @@ BtnState bUp, bDown, bLeft, bRight, bOk;
 void updateInput(unsigned long now) {
   const unsigned long MOVE_COOLDOWN = 120;
   bool canMove = (now - lastInputMs) >= MOVE_COOLDOWN;
+  
+  // Prevent movement during harvest
+  if (harvestState.active) {
+    canMove = false;
+  }
 
   bool up = pressed(BTN_UP);
   bool down = pressed(BTN_DOWN);
@@ -987,46 +947,37 @@ void updateInput(unsigned long now) {
   bool rightEdge = edgePress(right, bRight.prev);
   bool okEdge = edgePress(ok, bOk.prev);
 
-  // Gestion du menu titre
   if (titleState == TITLE_SHOWING) {
-    // S'assurer que la sélection est valide
     bool saveExists = hasSaveGame();
     if (!saveExists && titleMenuSelection > 0) {
       titleMenuSelection = 0;
     }
     
-    if (canMove) {
-      if (upEdge || downEdge) {
-        int maxOptions = saveExists ? 2 : 1;
-        titleMenuSelection = (titleMenuSelection + 1) % maxOptions;
-        lastInputMs = now;
-      }
+    if (canMove && (upEdge || downEdge)) {
+      int maxOptions = saveExists ? 2 : 1;
+      titleMenuSelection = (titleMenuSelection + 1) % maxOptions;
+      lastInputMs = now;
     }
     if (okEdge) {
       lastInputMs = now;
       if (titleMenuSelection == 0) {
-        // Nouveau jeu
         resetGame();
         titleState = TITLE_PLAYING;
-      } else if (titleMenuSelection == 1 && saveExists) {
-        // Continuer
-        if (loadGame()) {
-          titleState = TITLE_PLAYING;
-        }
+      } else if (titleMenuSelection == 1 && saveExists && loadGame()) {
+        titleState = TITLE_PLAYING;
       }
     }
-    return; // Ne pas gérer les autres inputs sur l'écran titre
+    return;
   }
 
-  // Gestion du menu du magasin
   if (shopMenuState == MENU_OPEN) {
     if (canMove) {
       if (upEdge) {
-        shopMenuSelection = (shopMenuSelection - 1 + 2) % 2;
+        shopMenuSelection = (shopMenuSelection - 1 + 3) % 3;
         lastInputMs = now;
       }
       if (downEdge) {
-        shopMenuSelection = (shopMenuSelection + 1) % 2;
+        shopMenuSelection = (shopMenuSelection + 1) % 3;
         lastInputMs = now;
       }
       if (leftEdge) {
@@ -1038,29 +989,25 @@ void updateInput(unsigned long now) {
     if (okEdge) {
       lastInputMs = now;
       if (shopMenuSelection == 0) {
-        // Acheter fromage
         int cheeseY = buyCheese(now);
         if (cheeseY >= 0) {
-          // Achat réussi : fermer le menu et afficher la flèche
           shopMenuState = MENU_CLOSED;
-          arrowIndicator.active = true;
-          arrowIndicator.cheeseY = cheeseY;
-          arrowIndicator.endTime = now + ARROW_DISPLAY_DURATION_MS;
+          arrowIndicator = {true, cheeseY, now + ARROW_DISPLAY_DURATION_MS};
         }
       } else if (shopMenuSelection == 1) {
-        // Acheter atelier
         if (buyWorkshop()) {
-          // Achat réussi : fermer le menu et afficher la flèche
           shopMenuState = MENU_CLOSED;
-          workshopArrowIndicator.active = true;
-          workshopArrowIndicator.endTime = now + ARROW_DISPLAY_DURATION_MS;
+          workshopArrowIndicator = {true, now + ARROW_DISPLAY_DURATION_MS};
+        }
+      } else if (shopMenuSelection == 2) {
+        if (buyFastHarvest()) {
+          shopMenuState = MENU_CLOSED;
         }
       }
     }
-    return; // Ne pas gérer le mouvement du joueur quand le menu est ouvert
+    return;
   }
 
-  // Gestion du menu de l'atelier
   if (workshopMenuState == WORKSHOP_MENU_OPEN) {
     if (leftEdge) {
       workshopMenuState = WORKSHOP_MENU_CLOSED;
@@ -1069,63 +1016,46 @@ void updateInput(unsigned long now) {
     }
     if (okEdge) {
       lastInputMs = now;
-      craftCroquettes();
-      // Le menu reste ouvert après craft
+      if (craftCroquettes(now)) {
+        workshopMenuState = WORKSHOP_MENU_CLOSED;
+      }
     }
-    return; // Ne pas gérer le mouvement du joueur quand le menu est ouvert
+    return;
   }
 
   if (canMove) {
     if (upEdge) {
       int ny = michka.y - 1;
-      // Empêcher d'entrer sur le magasin
-      if (!(ny == shopY && michka.x == shopX)) {
-        // Empêcher d'entrer sur l'atelier
-        if (!(hasWorkshop && ny == workshopY && michka.x == workshopX)) {
-          michka.y = clampi(ny, 0, GRID_H - 1);
-          lastInputMs = now;
-        }
+      if (!(ny == shopY && michka.x == shopX) && !(hasWorkshop && ny == workshopY && michka.x == workshopX)) {
+        michka.y = clampi(ny, 0, GRID_H - 1);
+        lastInputMs = now;
       }
     }
     if (downEdge) {
       int ny = michka.y + 1;
-      // Empêcher d'entrer sur le magasin
-      if (!(ny == shopY && michka.x == shopX)) {
-        // Empêcher d'entrer sur l'atelier
-        if (!(hasWorkshop && ny == workshopY && michka.x == workshopX)) {
-          michka.y = clampi(ny, 0, GRID_H - 1);
-          lastInputMs = now;
-        }
+      if (!(ny == shopY && michka.x == shopX) && !(hasWorkshop && ny == workshopY && michka.x == workshopX)) {
+        michka.y = clampi(ny, 0, GRID_H - 1);
+        lastInputMs = now;
       }
     }
 
     if (leftEdge) {
       int nx = michka.x - 1;
-      // Empêcher de traverser le mur sans passer par la porte
-      if (!(michka.x == 8 && nx == 7 && michka.y != DOOR_Y)) {
-        // Empêcher d'entrer sur le magasin
-        if (!(nx == shopX && michka.y == shopY)) {
-          // Empêcher d'entrer sur l'atelier
-          if (!(hasWorkshop && nx == workshopX && michka.y == workshopY)) {
-            michka.x = clampi(nx, 0, GRID_W - 1);
-            lastInputMs = now;
-          }
-        }
+      if (!(michka.x == 8 && nx == 7 && michka.y != DOOR_Y) && 
+          !(nx == shopX && michka.y == shopY) && 
+          !(hasWorkshop && nx == workshopX && michka.y == workshopY)) {
+        michka.x = clampi(nx, 0, GRID_W - 1);
+        lastInputMs = now;
       }
     }
 
     if (rightEdge) {
       int nx = michka.x + 1;
-      // Empêcher de traverser le mur sans passer par la porte
-      if (!(michka.x == 7 && nx == 8 && michka.y != DOOR_Y)) {
-        // Empêcher d'entrer sur le magasin
-        if (!(nx == shopX && michka.y == shopY)) {
-          // Empêcher d'entrer sur l'atelier
-          if (!(hasWorkshop && nx == workshopX && michka.y == workshopY)) {
-            michka.x = clampi(nx, 0, GRID_W - 1);
-            lastInputMs = now;
-          }
-        }
+      if (!(michka.x == 7 && nx == 8 && michka.y != DOOR_Y) && 
+          !(nx == shopX && michka.y == shopY) && 
+          !(hasWorkshop && nx == workshopX && michka.y == workshopY)) {
+        michka.x = clampi(nx, 0, GRID_W - 1);
+        lastInputMs = now;
       }
     }
   }
@@ -1136,7 +1066,6 @@ void updateInput(unsigned long now) {
   }
 }
 
-// ---------- Arduino ----------
 void setup() {
   pinMode(BTN_UP, INPUT_PULLUP);
   pinMode(BTN_DOWN, INPUT_PULLUP);
@@ -1149,37 +1078,27 @@ void setup() {
   Wire.begin();
   Wire.setClock(100000);
 
-  // Initialize EEPROM (nécessaire pour Raspberry Pi Pico)
-  EEPROM.begin(512); // Allouer 512 bytes pour la sauvegarde
-
+  EEPROM.begin(512);
   seedRandom();
   u8g2.begin();
 
-  // Initialiser les fromages par défaut
   for (int y = 0; y < GRID_H; y++) {
-    cheeses[y].active = false;
-    cheeses[y].usesMax = CHEESE_MAX_USES;
-    cheeses[y].usesLeft = 0;
+    cheeses[y] = {false, 0, CHEESE_MAX_USES};
   }
 
-  // Initialiser l'écran titre
   titleState = TITLE_SHOWING;
   titleMenuSelection = 0;
-  
   lastSaveMs = millis();
 }
 
 void loop() {
   unsigned long now = millis();
-
   updateInput(now);
   
-  // Ne mettre à jour le jeu que si on n'est pas sur l'écran titre
   if (titleState == TITLE_PLAYING) {
+    updateHarvest(now);
     updateMouse(now);
     updateVeggies(now);
-
-    // Sauvegarder périodiquement
     if (now - lastSaveMs >= SAVE_INTERVAL_MS) {
       saveGame();
       lastSaveMs = now;
@@ -1187,6 +1106,5 @@ void loop() {
   }
 
   render(now);
-
   delay(10);
 }
