@@ -30,7 +30,7 @@ static const int HUD_TEXT_SIZE = 2;
 static const int HUD_TOP_H = 24;
 static const int HUD_BOT_H = 24;
 
-// ✅ NEW: dedicated progress bar band (always cleared fully)
+// Dedicated progress bar band (not part of the game area)
 static const int BAR_H = 14;
 static const int BAR_Y = H - HUD_BOT_H - BAR_H;     // just above bottom HUD
 static const int BAR_X = 10;
@@ -111,6 +111,11 @@ struct HarvestState {
   unsigned long startMs;
   unsigned long endMs;
 } harvest = {false, -1, 0, 0};
+
+// ===== Harvest bar anti-flicker cache =====
+int lastBarFill = -1;
+unsigned long lastBarDrawMs = 0;
+const unsigned long BAR_REFRESH_MS = 33; // ~30 fps
 
 // ================= HELPERS =================
 static inline bool isGardenCell(int gx) { return gx >= SEP_X; }
@@ -278,11 +283,8 @@ void drawBottomHUD(bool force) {
   bottomDrawn = true;
 }
 
-// ✅ NEW: always clear the progress band completely (no residues)
 void clearProgressBand() {
   tft.fillRect(0, BAR_Y, W, BAR_H, COL_UI_BG);
-  // optional small separator line
-  // tft.drawFastHLine(0, BAR_Y, W, COL_WALL);
 }
 
 void drawHUD(bool force) {
@@ -291,12 +293,13 @@ void drawHUD(bool force) {
   if (force) clearProgressBand();
 }
 
-// ================= HARVEST BAR =================
+// ================= HARVEST BAR (anti-flicker) =================
 void drawHarvestBar(unsigned long now) {
-  // Always start by clearing the whole band => no leftover pixels
-  clearProgressBand();
-
   if (!harvest.active) return;
+
+  // throttle redraw rate
+  if (now - lastBarDrawMs < BAR_REFRESH_MS) return;
+  lastBarDrawMs = now;
 
   unsigned long total = harvest.endMs - harvest.startMs;
   unsigned long elapsed = (now > harvest.startMs) ? (now - harvest.startMs) : 0;
@@ -306,9 +309,19 @@ void drawHarvestBar(unsigned long now) {
   if (fill < 0) fill = 0;
   if (fill > BAR_W - 2) fill = BAR_W - 2;
 
-  tft.drawRect(BAR_X, BAR_Y + 2, BAR_W, BAR_H - 4, COL_WALL);
-  if (fill > 0) {
-    tft.fillRect(BAR_X + 1, BAR_Y + 3, fill, (BAR_H - 4) - 2, ST77XX_WHITE);
+  if (fill == lastBarFill) return;
+
+  // Only draw delta (new pixels)
+  int delta = fill - lastBarFill;
+  if (lastBarFill < 0) {
+    delta = fill;       // first draw
+    lastBarFill = 0;
+  }
+
+  if (delta > 0) {
+    int innerH = (BAR_H - 4) - 2;
+    tft.fillRect(BAR_X + 1 + lastBarFill, BAR_Y + 3, delta, innerH, ST77XX_WHITE);
+    lastBarFill = fill;
   }
 }
 
@@ -340,6 +353,15 @@ void startHarvest(int vegIndex, unsigned long now) {
   harvest.vegIndex = vegIndex;
   harvest.startMs = now;
   harvest.endMs = now + HARVEST_DURATION_MS;
+
+  // reset bar cache
+  lastBarFill = -1;
+  lastBarDrawMs = 0;
+
+  clearProgressBand();
+  tft.drawRect(BAR_X, BAR_Y + 2, BAR_W, BAR_H - 4, COL_WALL);
+
+  // first draw (0%)
   drawHarvestBar(now);
 }
 
@@ -362,8 +384,9 @@ void finishHarvest(unsigned long now) {
   harvest.active = false;
   harvest.vegIndex = -1;
 
-  // Clear the band once at end
-  drawHarvestBar(millis());
+  // Clear the band and reset cache
+  clearProgressBand();
+  lastBarFill = -1;
 }
 
 void updateHarvest(unsigned long now) {
