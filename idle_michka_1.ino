@@ -27,45 +27,59 @@ static const int H = 240;
 
 // ===== HUD sizing (bigger text) =====
 static const int HUD_TEXT_SIZE = 2;
-static const int HUD_TOP_H = 24;
-static const int HUD_BOT_H = 24;
+static const int HUD_TOP_H = 20;
+static const int HUD_BOT_H = 20;
 
 // Dedicated progress bar band (not part of the game area)
-static const int BAR_H = 14;
+static const int BAR_H = 12;
 static const int BAR_Y = H - HUD_BOT_H - BAR_H;     // just above bottom HUD
 static const int BAR_X = 10;
 static const int BAR_W = W - 20;
 
 // ===== Grid (logical) =====
-static const int GRID_W = 16;
-static const int GRID_H = 6;
+static const int GRID_W = 12;  // Reduced for bigger tiles
 
-static const int TILE_W = W / GRID_W; // 15
+// Calculate available height: from top HUD to progress bar
+static const int GAME_H_AVAIL = BAR_Y - HUD_TOP_H;
+// Calculate tile width based on screen width
+static const int TILE_W = W / GRID_W;
+// Calculate how many rows we can fit with square tiles to maximize height usage
+static const int GRID_H = GAME_H_AVAIL / TILE_W;
+// Use square tiles
+static const int TILE_H = TILE_W;
 
-// Height uses all space except HUDs + BAR band
-static const int GAME_H_AVAIL = H - HUD_TOP_H - HUD_BOT_H - BAR_H;
-static const int TILE_H = GAME_H_AVAIL / GRID_H;
+static const int GAME_USED_W = TILE_W * GRID_W;
 static const int GAME_USED_H = TILE_H * GRID_H;
-static const int GAME_Y_PAD  = (GAME_H_AVAIL - GAME_USED_H) / 2;
+static const int GAME_X_PAD = (W - GAME_USED_W) / 2;
+// Start at top, no vertical padding - use maximum height
+static const int GAME_Y_PAD = 0;
 
-static const int GRID_X = (W - GRID_W * TILE_W) / 2;
-static const int GRID_Y = HUD_TOP_H + GAME_Y_PAD;
+static const int GRID_X = GAME_X_PAD;
+static const int GRID_Y = HUD_TOP_H;
 
 // House / garden split
-static const int SEP_X  = 8;
+static const int SEP_X  = 6;  // Adjusted for GRID_W = 12 (half of grid)
 static const int DOOR_Y = 3;
 
 // Colors
 static const uint16_t COL_HOUSE  = ST77XX_BLACK;
-static const uint16_t COL_GARDEN = 0x03E0;        // green
+static const uint16_t COL_GARDEN = 0x03E0;        // green (base, not used directly)
 static const uint16_t COL_WALL   = ST77XX_WHITE;
 static const uint16_t COL_TEXT   = ST77XX_WHITE;
 static const uint16_t COL_UI_BG  = ST77XX_BLACK;
 
-// Veg colors
-static const uint16_t COL_VEG_0 = 0x7BEF;
-static const uint16_t COL_VEG_1 = 0x07E0;
-static const uint16_t COL_VEG_2 = 0xFFE0;
+// Lawn colors - multiple shades for realistic grass
+static const uint16_t COL_GRASS_DARK = 0x02C0;   // dark green
+static const uint16_t COL_GRASS_MID = 0x03E0;     // medium green
+static const uint16_t COL_GRASS_LIGHT = 0x07E0;  // light green
+static const uint16_t COL_DIRT_DARK = 0x4208;    // dark brown dirt
+static const uint16_t COL_DIRT_LIGHT = 0x5A67;    // light brown dirt
+
+// Veg colors - darker/more saturated for better contrast on green lawn
+static const uint16_t COL_VEG_0 = 0x7BEF;      // light gray for seed
+static const uint16_t COL_BRANCH = 0x4208;     // dark brown for branches (good contrast on green)
+static const uint16_t COL_FOLIAGE = 0x05E0;    // darker green for foliage (more contrast)
+static const uint16_t COL_FRUIT = 0xF800;       // bright red for fruits
 
 // ================= GAME STATE (HUD) =================
 int resM = 0;
@@ -96,10 +110,10 @@ struct Veg {
 };
 
 Veg vegs[] = {
-  {10, 1, 0, 0},
-  {12, 3, 0, 0},
-  {14, 2, 0, 0},
-  { 9, 4, 0, 0}
+  { 8, 0, 0, 0},  // Top of garden
+  {10, 2, 0, 0},  // Upper-middle
+  { 9, 5, 0, 0},  // Lower-middle
+  {11, 7, 0, 0}   // Bottom of garden (distributed across full height)
 };
 static const int VEG_COUNT = sizeof(vegs) / sizeof(vegs[0]);
 
@@ -129,11 +143,42 @@ int findVegAt(int gx, int gy) {
   return -1;
 }
 
-void drawCell(int gx, int gy) {
+void drawLawnCell(int gx, int gy) {
   int x = cellX(gx);
   int y = cellY(gy);
-  uint16_t bg = isGardenCell(gx) ? COL_GARDEN : COL_HOUSE;
-  tft.fillRect(x, y, TILE_W, TILE_H, bg);
+  
+  // Simple hash based on cell position for deterministic pattern
+  int hash = ((gx * 7) + (gy * 11)) % 20;
+  
+  // Base color varies slightly by cell (no light green)
+  uint16_t baseColor;
+  if (hash < 3) {
+    baseColor = COL_GRASS_DARK;  // 15% dark green
+  } else if (hash < 4) {
+    baseColor = COL_DIRT_LIGHT;   // 5% light dirt
+  } else {
+    baseColor = COL_GRASS_MID;    // 80% medium green
+  }
+  
+  tft.fillRect(x, y, TILE_W, TILE_H, baseColor);
+  
+  // Add a small square dirt patch in some cells (20% chance)
+  if (hash < 4 && TILE_W > 3 && TILE_H > 3) {
+    int patchSize = 2 + (hash % 2);  // 2x2 or 3x3 square
+    int patchX = x + (hash % (TILE_W - patchSize));
+    int patchY = y + ((hash * 3) % (TILE_H - patchSize));
+    tft.fillRect(patchX, patchY, patchSize, patchSize, COL_DIRT_DARK);
+  }
+}
+
+void drawCell(int gx, int gy) {
+  if (isGardenCell(gx)) {
+    drawLawnCell(gx, gy);
+  } else {
+    int x = cellX(gx);
+    int y = cellY(gy);
+    tft.fillRect(x, y, TILE_W, TILE_H, COL_HOUSE);
+  }
 }
 
 void drawFrame() {
@@ -152,7 +197,11 @@ void drawSeparatorWithDoor() {
   int py = cellY(DOOR_Y);
   int doorH = TILE_H - 4;
   if (doorH < 6) doorH = 6;
-  tft.drawRect(x - 2, py + 2, 4, doorH, COL_WALL);
+  // Center the door both horizontally and vertically
+  int doorW = 4;
+  int doorX = x - (doorW / 2);
+  int doorY = py + (TILE_H - doorH) / 2;  // Center vertically in the cell
+  tft.drawRect(doorX, doorY, doorW, doorH, COL_WALL);
 }
 
 void drawStaticWalls() {
@@ -161,12 +210,17 @@ void drawStaticWalls() {
 }
 
 bool canCrossSeparator(int fromGX, int fromGY, int toGX, int toGY) {
-  if (fromGY == toGY) {
-    bool crossing =
-      (fromGX == SEP_X - 1 && toGX == SEP_X) ||
-      (fromGX == SEP_X && toGX == SEP_X - 1);
-    if (crossing) return (fromGY == DOOR_Y);
+  // Check if crossing the separator horizontally (including diagonal movements)
+  bool crossingHorizontally =
+    (fromGX == SEP_X - 1 && toGX == SEP_X) ||
+    (fromGX == SEP_X && toGX == SEP_X - 1);
+  
+  if (crossingHorizontally) {
+    // Can only cross if at door Y position
+    return (fromGY == DOOR_Y && toGY == DOOR_Y);
   }
+  
+  // Allow all other movements (pure vertical, or movements that don't cross the separator)
   return true;
 }
 
@@ -176,31 +230,230 @@ void drawVegAtCell(int gx, int gy, int stage) {
   int py = cellY(gy);
 
   int cx = px + TILE_W / 2;
-  int baseY = py + TILE_H - 4;
+  int baseY = py + TILE_H - 1;
 
   if (stage == 0) {
-    tft.drawPixel(cx, baseY, COL_VEG_0);
+    // Rien - pas de dessin
     return;
   }
 
   if (stage == 1) {
-    int stemTop = baseY - 6;
-    if (stemTop < py + 3) stemTop = py + 3;
-    tft.drawFastVLine(cx, stemTop, baseY - stemTop, COL_VEG_1);
-    tft.drawPixel(cx - 1, stemTop + 2, COL_VEG_1);
-    tft.drawPixel(cx + 1, stemTop + 2, COL_VEG_1);
+    // Arbuste "nu" - branches marron seulement (pas de tronc vertical)
+    int baseBranchY = baseY - 1;
+    
+    // Branches principales qui partent de la base et montent
+    // Branche gauche principale
+    int leftBranchStartY = baseBranchY;
+    int leftBranchEndY = baseBranchY - 6;
+    if (leftBranchEndY < py + 2) leftBranchEndY = py + 2;
+    for (int y = leftBranchStartY; y >= leftBranchEndY; y--) {
+      int offset = (leftBranchStartY - y) / 2;
+      if (cx - offset >= px + 1) {
+        tft.drawPixel(cx - offset, y, COL_BRANCH);
+        if (offset > 0 && cx - offset - 1 >= px) {
+          tft.drawPixel(cx - offset - 1, y, COL_BRANCH);
+        }
+      }
+    }
+    
+    // Branche droite principale
+    int rightBranchStartY = baseBranchY;
+    int rightBranchEndY = baseBranchY - 6;
+    if (rightBranchEndY < py + 2) rightBranchEndY = py + 2;
+    for (int y = rightBranchStartY; y >= rightBranchEndY; y--) {
+      int offset = (rightBranchStartY - y) / 2;
+      if (cx + offset < px + TILE_W - 1) {
+        tft.drawPixel(cx + offset, y, COL_BRANCH);
+        if (offset > 0 && cx + offset + 1 < px + TILE_W) {
+          tft.drawPixel(cx + offset + 1, y, COL_BRANCH);
+        }
+      }
+    }
+    
+    // Branche centrale qui monte
+    int centerBranchY = baseBranchY - 4;
+    if (centerBranchY >= py + 2) {
+      tft.drawFastVLine(cx, centerBranchY, baseBranchY - centerBranchY, COL_BRANCH);
+    }
+    
+    // Petites branches secondaires
+    int midY = baseBranchY - 3;
+    if (midY >= py + 2 && midY < baseBranchY) {
+      tft.drawPixel(cx - 2, midY, COL_BRANCH);
+      tft.drawPixel(cx + 2, midY, COL_BRANCH);
+      tft.drawPixel(cx - 1, midY - 1, COL_BRANCH);
+      tft.drawPixel(cx + 1, midY - 1, COL_BRANCH);
+    }
     return;
   }
 
-  uint16_t c = COL_VEG_2;
-  int r = 3;
-  int y = py + TILE_H / 2;
-  if (y - r < py + 2) y = py + 2 + r;
-  if (y + r > py + TILE_H - 2) y = py + TILE_H - 2 - r;
+  if (stage == 2) {
+    // Arbuste vert - branches marron + feuillage vert
+    int baseBranchY = baseY - 1;
+    
+    // Branches principales marron (même style que stage 1 mais plus développées)
+    // Branche gauche principale
+    int leftBranchStartY = baseBranchY;
+    int leftBranchEndY = baseBranchY - 8;
+    if (leftBranchEndY < py + 2) leftBranchEndY = py + 2;
+    for (int y = leftBranchStartY; y >= leftBranchEndY; y--) {
+      int offset = (leftBranchStartY - y) / 2;
+      if (cx - offset >= px + 1) {
+        tft.drawPixel(cx - offset, y, COL_BRANCH);
+        if (offset > 0 && cx - offset - 1 >= px) {
+          tft.drawPixel(cx - offset - 1, y, COL_BRANCH);
+        }
+      }
+    }
+    
+    // Branche droite principale
+    int rightBranchStartY = baseBranchY;
+    int rightBranchEndY = baseBranchY - 8;
+    if (rightBranchEndY < py + 2) rightBranchEndY = py + 2;
+    for (int y = rightBranchStartY; y >= rightBranchEndY; y--) {
+      int offset = (rightBranchStartY - y) / 2;
+      if (cx + offset < px + TILE_W - 1) {
+        tft.drawPixel(cx + offset, y, COL_BRANCH);
+        if (offset > 0 && cx + offset + 1 < px + TILE_W) {
+          tft.drawPixel(cx + offset + 1, y, COL_BRANCH);
+        }
+      }
+    }
+    
+    // Branche centrale
+    int centerBranchY = baseBranchY - 6;
+    if (centerBranchY >= py + 2) {
+      tft.drawFastVLine(cx, centerBranchY, baseBranchY - centerBranchY, COL_BRANCH);
+    }
+    
+    // Petites branches secondaires
+    int midY = baseBranchY - 4;
+    if (midY >= py + 2 && midY < baseBranchY) {
+      tft.drawPixel(cx - 3, midY, COL_BRANCH);
+      tft.drawPixel(cx + 3, midY, COL_BRANCH);
+      tft.drawPixel(cx - 2, midY - 1, COL_BRANCH);
+      tft.drawPixel(cx + 2, midY - 1, COL_BRANCH);
+    }
+    
+    // Feuillage vert (plus grand)
+    int foliageCenterY = baseBranchY - 7;
+    if (foliageCenterY < py + 2) foliageCenterY = py + 2;
+    
+    int foliageR = 5;
+    int maxR = (TILE_H - (foliageCenterY - py) - 2) / 2;
+    if (foliageR > maxR) foliageR = maxR;
+    if (foliageR < 3) foliageR = 3;
+    
+    // Feuillage principal (cercle vert)
+    tft.fillCircle(cx, foliageCenterY, foliageR, COL_FOLIAGE);
+    
+    // Ajouter de la texture au feuillage
+    if (foliageR >= 4) {
+      tft.drawPixel(cx - 2, foliageCenterY - 2, COL_FOLIAGE);
+      tft.drawPixel(cx + 2, foliageCenterY - 2, COL_FOLIAGE);
+      tft.drawPixel(cx - 3, foliageCenterY, COL_FOLIAGE);
+      tft.drawPixel(cx + 3, foliageCenterY, COL_FOLIAGE);
+    }
+    return;
+  }
 
-  tft.fillCircle(cx - 3, y, r, c);
-  tft.fillCircle(cx + 3, y, r, c);
-  tft.fillCircle(cx,     y - 3, r, c);
+  // Stage 3: Arbuste vert avec fruits rouges ronds
+  int baseBranchY = baseY - 1;
+  
+  // Branches principales marron (bien développées)
+  // Branche gauche principale
+  int leftBranchStartY = baseBranchY;
+  int leftBranchEndY = baseBranchY - 10;
+  if (leftBranchEndY < py + 2) leftBranchEndY = py + 2;
+  for (int y = leftBranchStartY; y >= leftBranchEndY; y--) {
+    int offset = (leftBranchStartY - y) / 2;
+    if (cx - offset >= px + 1) {
+      tft.drawPixel(cx - offset, y, COL_BRANCH);
+      if (offset > 0 && cx - offset - 1 >= px) {
+        tft.drawPixel(cx - offset - 1, y, COL_BRANCH);
+      }
+    }
+  }
+  
+  // Branche droite principale
+  int rightBranchStartY = baseBranchY;
+  int rightBranchEndY = baseBranchY - 10;
+  if (rightBranchEndY < py + 2) rightBranchEndY = py + 2;
+  for (int y = rightBranchStartY; y >= rightBranchEndY; y--) {
+    int offset = (rightBranchStartY - y) / 2;
+    if (cx + offset < px + TILE_W - 1) {
+      tft.drawPixel(cx + offset, y, COL_BRANCH);
+      if (offset > 0 && cx + offset + 1 < px + TILE_W) {
+        tft.drawPixel(cx + offset + 1, y, COL_BRANCH);
+      }
+    }
+  }
+  
+  // Branche centrale
+  int centerBranchY = baseBranchY - 8;
+  if (centerBranchY >= py + 2) {
+    tft.drawFastVLine(cx, centerBranchY, baseBranchY - centerBranchY, COL_BRANCH);
+  }
+  
+  // Petites branches secondaires
+  int midY1 = baseBranchY - 5;
+  int midY2 = baseBranchY - 3;
+  if (midY1 >= py + 2 && midY1 < baseBranchY) {
+    tft.drawPixel(cx - 3, midY1, COL_BRANCH);
+    tft.drawPixel(cx + 3, midY1, COL_BRANCH);
+    tft.drawPixel(cx - 2, midY1 - 1, COL_BRANCH);
+    tft.drawPixel(cx + 2, midY1 - 1, COL_BRANCH);
+  }
+  if (midY2 >= py + 2 && midY2 < baseBranchY) {
+    tft.drawPixel(cx - 4, midY2, COL_BRANCH);
+    tft.drawPixel(cx + 4, midY2, COL_BRANCH);
+  }
+  
+  // Feuillage vert (grand)
+  int foliageCenterY = baseBranchY - 9;
+  if (foliageCenterY < py + 2) foliageCenterY = py + 2;
+  
+  int foliageR = 6;
+  int maxR = (TILE_H - (foliageCenterY - py) - 2) / 2;
+  if (foliageR > maxR) foliageR = maxR;
+  if (foliageR < 4) foliageR = 4;
+  
+  // Feuillage principal
+  tft.fillCircle(cx, foliageCenterY, foliageR, COL_FOLIAGE);
+  
+  // Texture du feuillage
+  if (foliageR >= 4) {
+    tft.drawPixel(cx - 3, foliageCenterY - 2, COL_FOLIAGE);
+    tft.drawPixel(cx + 3, foliageCenterY - 2, COL_FOLIAGE);
+    tft.drawPixel(cx - 4, foliageCenterY, COL_FOLIAGE);
+    tft.drawPixel(cx + 4, foliageCenterY, COL_FOLIAGE);
+    tft.drawPixel(cx - 2, foliageCenterY + 2, COL_FOLIAGE);
+    tft.drawPixel(cx + 2, foliageCenterY + 2, COL_FOLIAGE);
+  }
+  
+  // Fruits rouges ronds sur l'arbuste
+  int fruitR = 2; // rayon des fruits
+  if (fruitR < 1) fruitR = 1;
+  
+  // Fruits en haut
+  if (foliageCenterY - 3 >= py + 2) {
+    tft.fillCircle(cx, foliageCenterY - 3, fruitR, COL_FRUIT);
+  }
+  
+  // Fruits sur les côtés
+  if (foliageCenterY - 1 >= py + 2 && foliageCenterY - 1 < py + TILE_H - 2) {
+    tft.fillCircle(cx - 3, foliageCenterY - 1, fruitR, COL_FRUIT);
+    tft.fillCircle(cx + 3, foliageCenterY - 1, fruitR, COL_FRUIT);
+  }
+  
+  // Fruits au centre et en bas
+  if (foliageCenterY + 1 >= py + 2 && foliageCenterY + 1 < py + TILE_H - 2) {
+    tft.fillCircle(cx, foliageCenterY + 1, fruitR, COL_FRUIT);
+  }
+  if (foliageCenterY + 2 >= py + 2 && foliageCenterY + 2 < py + TILE_H - 2) {
+    tft.fillCircle(cx - 2, foliageCenterY + 2, fruitR, COL_FRUIT);
+    tft.fillCircle(cx + 2, foliageCenterY + 2, fruitR, COL_FRUIT);
+  }
 }
 
 void redrawCellWithEntities(int gx, int gy) {
@@ -217,34 +470,17 @@ void drawCat(int gx, int gy) {
   int px = cellX(gx);
   int py = cellY(gy);
 
-  const int mx = 2;
-  const int my = 2;
-
-  int cx = px + TILE_W / 2;
-  int cy = py + TILE_H / 2;
-
-  int maxRbyW = (TILE_W / 2) - mx;
-  int maxRbyH = (TILE_H / 2) - my;
-  int R = (maxRbyW < maxRbyH) ? maxRbyW : maxRbyH;
-
-  if (R > 7) R = 7;
-  if (R < 4) R = 4;
-
-  if (cy - (R + 4) < py + my) cy = (py + my) + (R + 4);
-  if (cy + R > py + TILE_H - 1 - my) cy = (py + TILE_H - 1 - my) - R;
-
-  tft.fillCircle(cx, cy, R, ST77XX_WHITE);
-
-  int earTopY = cy - (R + 4);
-  if (earTopY < py + my) earTopY = py + my;
-
-  tft.fillTriangle(cx - R, cy - 1, cx - 1, cy - 1, cx - (R - 1), earTopY, ST77XX_WHITE);
-  tft.fillTriangle(cx + 1, cy - 1, cx + R, cy - 1, cx + (R - 1), earTopY, ST77XX_WHITE);
-
-  tft.fillCircle(cx - (R / 2), cy - 1, 1, ST77XX_BLACK);
-  tft.fillCircle(cx + (R / 2), cy - 1, 1, ST77XX_BLACK);
-
-  tft.fillTriangle(cx, cy + 1, cx - 1, cy + 3, cx + 1, cy + 3, ST77XX_BLACK);
+  // Simple white square for the cat
+  const int margin = 2;
+  int catSize = (TILE_W < TILE_H) ? TILE_W : TILE_H;
+  catSize -= (margin * 2);
+  if (catSize < 8) catSize = 8;
+  if (catSize > 16) catSize = 16;
+  
+  int catX = px + (TILE_W - catSize) / 2;
+  int catY = py + (TILE_H - catSize) / 2;
+  
+  tft.fillRect(catX, catY, catSize, catSize, ST77XX_WHITE);
 }
 
 // ================= HUD =================
@@ -334,11 +570,11 @@ void scheduleVegIfNeeded(int i, unsigned long now) {
 
 void updateVeggies(unsigned long now) {
   for (int i = 0; i < VEG_COUNT; i++) {
-    if (vegs[i].stage < 2) scheduleVegIfNeeded(i, now);
+    if (vegs[i].stage < 3) scheduleVegIfNeeded(i, now);
 
-    if (vegs[i].stage < 2 && vegs[i].nextStepMs > 0 && now >= vegs[i].nextStepMs) {
+    if (vegs[i].stage < 3 && vegs[i].nextStepMs > 0 && now >= vegs[i].nextStepMs) {
       vegs[i].stage++;
-      if (vegs[i].stage < 2) vegs[i].nextStepMs = now + (unsigned long)random(VEG_GROW_MIN_MS, VEG_GROW_MAX_MS);
+      if (vegs[i].stage < 3) vegs[i].nextStepMs = now + (unsigned long)random(VEG_GROW_MIN_MS, VEG_GROW_MAX_MS);
       else vegs[i].nextStepMs = 0;
 
       redrawCellWithEntities(vegs[i].x, vegs[i].y);
@@ -454,7 +690,7 @@ void loop() {
 
   if (okEdge) {
     int vi = findVegAt(catGX, catGY);
-    if (vi >= 0 && vegs[vi].stage == 2) {
+    if (vi >= 0 && vegs[vi].stage == 3) {
       startHarvest(vi, now);
       return;
     }
